@@ -1,0 +1,146 @@
+workflow:
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "push"
+
+stages:
+  - lint
+  - build
+  - release
+  - publish
+
+variables:
+  CARGO_TERM_COLOR: always
+  KODIK_TOKEN: $KODIK_TOKEN
+
+.linux-common: &linux-common
+  image: rust:latest
+  before_script:
+    - apt-get update -qq && apt-get install -y -qq pkg-config libssl-dev
+
+..lint:
+  name: Lint
+  <<: *linux-common
+  stage: lint
+  script:
+    - cargo fmt --all -- --check
+    - cargo clippy --workspace --all-targets -- -D warnings
+    - cargo check --workspace
+    - cargo doc --workspace --no-deps
+
+.build-x86_64-linux:
+  <<: *linux-common
+  stage: build
+  script:
+    - rustup target add x86_64-unknown-linux-gnu
+    - cargo build --workspace --release --target x86_64-unknown-linux-gnu
+    - cp target/x86_64-unknown-linux-gnu/release/kodik kodik-x86_64-unknown-linux-gnu
+    - cp target/x86_64-unknown-linux-gnu/release/libkodik.so kodik-x86_64-unknown-linux-gnu/kodik-mpv-plugin.so
+  artifacts:
+    name: kodik-x86_64-linux
+    paths:
+      - kodik-x86_64-unknown-linux-gnu/
+    expire_in: 1 week
+
+.build-aarch64-linux:
+  <<: *linux-common
+  stage: build
+  script:
+    - rustup target add aarch64-unknown-linux-gnu
+    - cargo build --workspace --release --target aarch64-unknown-linux-gnu
+    - cp target/aarch64-unknown-linux-gnu/release/kodik kodik-aarch64-unknown-linux-gnu
+    - cp target/aarch64-unknown-linux-gnu/release/libkodik.so kodik-aarch64-unknown-linux-gnu/kodik-mpv-plugin.so
+  artifacts:
+    name: kodik-aarch64-linux
+    paths:
+      - kodik-aarch64-unknown-linux-gnu/
+    expire_in: 1 week
+
+.build-x86_64-windows:
+  <<: *linux-common
+  stage: build
+  script:
+    - rustup target add x86_64-pc-windows-msvc
+    - cargo build --workspace --release --target x86_64-pc-windows-msvc
+    - cp target/x86_64-pc-windows-msvc/release/kodik.exe kodik-x86_64-pc-windows-msvc/
+    - cp target/x86_64-pc-windows-msvc/release/kodik.dll kodik-x86_64-pc-windows-msvc/kodik-mpv-plugin.dll
+  artifacts:
+    name: kodik-windows-x86_64
+    paths:
+      - kodik-x86_64-pc-windows-msvc/
+    expire_in: 1 week
+
+.build-aarch64-macos:
+  <<: *linux-common
+  image: ghcr.io/cross-rs/aarch64-apple-darwin:latest
+  before_script: []
+  stage: build
+  script:
+    - cargo build --workspace --release --target aarch64-apple-darwin
+    - mkdir -p kodik-aarch64-apple-darwin
+    - cp target/aarch64-apple-darwin/release/kodik kodik-aarch64-apple-darwin/
+    - cp target/aarch64-apple-darwin/release/libkodik.dylib kodik-aarch64-apple-darwin/kodik-mpv-plugin.dylib
+  artifacts:
+    name: kodik-macos-aarch64
+    paths:
+      - kodik-aarch64-apple-darwin/
+    expire_in: 1 week
+
+.build-android:
+  <<: *linux-common
+  stage: build
+  before_script:
+    - apt-get update -qq && apt-get install -y -qq unzip
+    - rustup target add aarch64-linux-android armv7-linux-androideabi
+    - |
+      if [ ! -d "$ANDROID_NDK_HOME" ]; then
+        echo "ANDROID_NDK_HOME not set — configure NDK in CI/CD settings"
+        exit 1
+      fi
+  script:
+    - export ANDROID_NDK_ROOT="$ANDROID_NDK_HOME"
+    - |
+      cat > target/aarch64-linux-android/cargo/config.toml <<'EOF'
+      [target.aarch64-linux-android]
+      linker = "aarch64-linux-android21-clang"
+      EOF
+    - export CC_aarch64_linux_android=aarch64-linux-android21-clang
+    - export AR_aarch64_linux_android=aarch64-linux-android-ar
+    - cargo build --workspace --release --target aarch64-linux-android
+
+    - mkdir -p android/app/src/main/jniLibs/arm64-v8a
+    - cp target/aarch64-linux-android/release/libkodik.so android/app/src/main/jniLibs/arm64-v8a/libkodik.so
+
+  artifacts:
+    name: kodik-android
+    paths:
+      - android/
+    expire_in: 1 week
+
+.release:
+  stage: release
+  image: registry.gitlab.com/gitlab-org/release-cli:latest
+  needs:
+    - job: .build-x86_64-linux
+      artifacts: true
+    - job: .build-aarch64-linux
+      artifacts: true
+    - job: .build-x86_64-windows
+      artifacts: true
+    - job: .build-aarch64-macos
+      artifacts: true
+    - job: .build-android
+      artifacts: true
+  rules:
+    - if: $CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+$/
+  script:
+    - |
+      release-cli create \
+        --name "$CI_COMMIT_TAG" \
+        --tag-name "$CI_COMMIT_TAG" \
+        --ref "$CI_COMMIT_SHA" \
+        --assets-link '{"name":"Linux x86_64","url":"'"$CI_SERVER_URL/$CI_PROJECT_PATH/-/jobs/artifacts/$CI_COMMIT_REF_NAME/raw/kodik-x86_64-unknown-linux-gnu/kodik.zip?job=build:x86_64-linux"'"}' \
+        --assets-link '{"name":"Linux aarch64","url":"'"$CI_SERVER_URL/$CI_PROJECT_PATH/-/jobs/artifacts/$CI_COMMIT_REF_NAME/raw/kodik-aarch64-unknown-linux-gnu/kodik.zip?job=build:aarch64-linux"'"}' \
+        --assets-link '{"name":"Windows x86_64","url":"'"$CI_SERVER_URL/$CI_PROJECT_PATH/-/jobs/artifacts/$CI_COMMIT_REF_NAME/raw/kodik-x86_64-pc-windows-msvc/kodik.zip?job=build:x86_64-windows"'"}' \
+        --assets-link '{"name":"macOS aarch64","url":"'"$CI_SERVER_URL/$CI_PROJECT_PATH/-/jobs/artifacts/$CI_COMMIT_REF_NAME/raw/kodik-aarch64-apple-darwin/kodik.zip?job=build:aarch64-macos"'"}' \
+        --assets-link '{"name":"Android (aarch64)","url":"'"$CI_SERVER_URL/$CI_PROJECT_PATH/-/jobs/artifacts/$CI_COMMIT_REF_NAME/raw/android/kodik-android.zip?job=build:android"'"}' \
+        --released-at "$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
