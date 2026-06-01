@@ -2,6 +2,7 @@ use crate::cache::Cache;
 use crate::config::{Config, Quality};
 use anyhow::{self, Context as _, Result, bail};
 use futures::future;
+use kodik_parser::Links;
 use reqwest::cookie::Jar;
 use reqwest::{Client, Url};
 use std::io::{self, BufWriter, Write as _};
@@ -47,7 +48,7 @@ async fn run_impl(args: Vec<String>) -> Result<()> {
         let urls = resolve_url(client, url, config, &jar).await?;
 
         let futures = urls.into_iter().map(|url| async move {
-            let links = kodik_parser::parse(client, url.as_str()).await?;
+            let links = Links::fetch(client, url.as_str()).await?;
             Ok::<String, anyhow::Error>(match config.quality {
                 Quality::P360 => links.p360,
                 Quality::P480 => links.p480,

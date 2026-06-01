@@ -4,7 +4,7 @@ use anyhow::Context;
 use anyhow::Result;
 use kodik_parser::KodikApiResponse;
 use kodik_parser::TranslationType;
-use kodik_shiki::ShikiApiAnimes;
+use kodik_shiki::Anime;
 use reqwest::cookie::CookieStore;
 use reqwest::{Client, Url, cookie::Jar};
 
@@ -20,7 +20,7 @@ pub async fn resolve_shiki(client: &Client, url: &Url, config: &Config, jar: &Ja
     }
 
     let shiki_api_animes = if has_cookies || config.related_mode.is_some() {
-        Some(ShikiApiAnimes::fetch(client, url.as_str()).await?)
+        Some(Anime::fetch(client, url.as_str()).await?)
     } else {
         None
     };
@@ -34,13 +34,13 @@ pub async fn resolve_shiki(client: &Client, url: &Url, config: &Config, jar: &Ja
             let domain = url.domain().context("url have no domain")?;
 
             let mut related = match mode {
-                RelatedMode::All => kodik_shiki::Related::fetch_by_franchise(client, franchise, domain, &[]).await?,
+                RelatedMode::All => kodik_shiki::Franchise::fetch(client, franchise, domain, &[]).await?,
                 RelatedMode::Essential => {
                     let not_anime_ids = kodik_shiki::fetch_not_anime_ids(client, franchise)
                         .await?
                         .context("there are no 'not anime ids (just log::warn)'")?;
 
-                    kodik_shiki::Related::fetch_by_franchise(client, franchise, domain, not_anime_ids).await?
+                    kodik_shiki::Franchise::fetch(client, franchise, domain, not_anime_ids).await?
                 }
             };
             related.sort_by_chrono();
@@ -63,7 +63,7 @@ async fn shiki_helper(
     url: &Url,
     config: &Config,
     shikimori_id: usize,
-    shiki_api_animes: Option<&ShikiApiAnimes>,
+    shiki_api_animes: Option<&Anime>,
 ) -> Result<Vec<String>> {
     let kodik_api_resp = KodikApiResponse::fetch_shiki(client, shikimori_id).await?;
 

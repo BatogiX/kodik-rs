@@ -4,7 +4,7 @@ use clap::{
     builder::styling::{self, Styles},
 };
 use kodik_parser::TranslationType;
-use kodik_utils::load_netscape_cookies;
+use kodik_utils::{Jar, JarExt};
 use log::LevelFilter;
 use reqwest::Url;
 
@@ -69,8 +69,8 @@ impl Config {
 
     pub fn load_cookies(&self) -> Result<reqwest::cookie::Jar> {
         Ok(match &self.cookies {
-            Some(path) => load_netscape_cookies(path)?,
-            None => reqwest::cookie::Jar::default(),
+            Some(path) => Jar::load_netscape(path)?,
+            None => Jar::default(),
         })
     }
 }
